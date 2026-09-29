@@ -1,0 +1,422 @@
+¡Sí, por supuesto! A continuación tienes un ejemplo completo y funcional de principio a fin
+, diseñado respetando la arquitectura multicapa (BDD → DAO → Servicio → Servlet → JSP/HTML) vista en la materia
+.
+1. Base de Datos (personas.sql)
+Script DDL para crear la tabla Personas en MySQL / SQL Server
+.
+CREATE TABLE Personas (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    dni VARCHAR(15) NOT NULL UNIQUE,
+    nombre VARCHAR(50) NOT NULL,
+    apellido VARCHAR(50) NOT NULL,
+    edad INT NOT NULL
+);
+2. Entidad / POJO (Persona.java)
+Clase simple de dominio con atributos, constructores, getters y setters
+.
+package edu.usal.domain;
+
+public class Persona {
+    private int id;
+    private String dni;
+    private String nombre;
+    private String apellido;
+    private int edad;
+
+    public Persona() {}
+
+    public Persona(String dni, String nombre, String apellido, int edad) {
+        this.dni = dni;
+        this.nombre = nombre;
+        this.apellido = apellido;
+        this.edad = edad;
+    }
+
+    public Persona(int id, String dni, String nombre, String apellido, int edad) {
+        this(dni, nombre, apellido, edad);
+        this.id = id;
+    }
+
+    public int getId() { return id; }
+    public void setId(int id) { this.id = id; }
+
+    public String getDni() { return dni; }
+    public void setDni(String dni) { this.dni = dni; }
+
+    public String getNombre() { return nombre; }
+    public void setNombre(String nombre) { this.nombre = nombre; }
+
+    public String getApellido() { return apellido; }
+    public void setApellido(String apellido) { this.apellido = apellido; }
+
+    public int getEdad() { return edad; }
+    public void setEdad(int edad) { this.edad = edad; }
+}
+3. Singleton de Conexión (ConexionBD.java)
+Garantiza el punto centralizado de acceso al motor de base de datos
+.
+package edu.usal.util;
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
+
+public class ConexionBD {
+    private static ConexionBD instancia;
+    private static final String URL = "jdbc:mysql://localhost:3306/mi_base_datos?useSSL=false&serverTimezone=UTC";
+    private static final String USER = "root";
+    private static final String PASS = "root";
+
+    private ConexionBD() {
+        try {
+            Class.forName("com.mysql.cj.jdbc.Driver");
+        } catch (ClassNotFoundException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public static synchronized ConexionBD getInstance() {
+        if (instancia == null) {
+            instancia = new ConexionBD();
+        }
+        return instancia;
+    }
+
+    public Connection getConnection() throws SQLException {
+        return DriverManager.getConnection(URL, USER, PASS);
+    }
+}
+4. Capa DAO (Interfaz e Implementación)
+La interfaz define las firmas del CRUD
+, y la implementación ejecuta el acceso a datos mediante PreparedStatement
+.
+PersonaDAO.java
+package edu.usal.dao.interfaces;
+
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.util.List;
+import edu.usal.domain.Persona;
+
+public interface PersonaDAO {
+    List<Persona> listarTodas(Connection con) throws SQLException;
+    void crear(Persona persona, Connection con) throws SQLException;
+    void actualizarPorDni(Persona persona, Connection con) throws SQLException;
+    void eliminarPorDni(String dni, Connection con) throws SQLException;
+}
+PersonaDAOImpl.java
+package edu.usal.dao.impl;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
+
+import edu.usal.dao.interfaces.PersonaDAO;
+import edu.usal.domain.Persona;
+
+public class PersonaDAOImpl implements PersonaDAO {
+
+    @Override
+    public List<Persona> listarTodas(Connection con) throws SQLException {
+        List<Persona> lista = new ArrayList<>();
+        String sql = "SELECT id, dni, nombre, apellido, edad FROM Personas";
+
+        try (PreparedStatement ps = con.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            
+            while (rs.next()) {
+                Persona p = new Persona(
+                    rs.getInt("id"),
+                    rs.getString("dni"),
+                    rs.getString("nombre"),
+                    rs.getString("apellido"),
+                    rs.getInt("edad")
+                );
+                lista.add(p);
+            }
+        }
+        return lista;
+    }
+
+    @Override
+    public void crear(Persona p, Connection con) throws SQLException {
+        String sql = "INSERT INTO Personas (dni, nombre, apellido, edad) VALUES (?, ?, ?, ?)";
+        try (PreparedStatement ps = con.prepareStatement(sql)) {
+            ps.setString(1, p.getDni());
+            ps.setString(2, p.getNombre());
+            ps.setString(3, p.getApellido());
+            ps.setInt(4, p.getEdad());
+            ps.executeUpdate();
+        }
+    }
+
+    @Override
+    public void actualizarPorDni(Persona p, Connection con) throws SQLException {
+        String sql = "UPDATE Personas SET nombre = ?, apellido = ?, edad = ? WHERE dni = ?";
+        try (PreparedStatement ps = con.prepareStatement(sql)) {
+            ps.setString(1, p.getNombre());
+            ps.setString(2, p.getApellido());
+            ps.setInt(3, p.getEdad());
+            ps.setString(4, p.getDni());
+            ps.executeUpdate();
+        }
+    }
+
+    @Override
+    public void eliminarPorDni(String dni, Connection con) throws SQLException {
+        String sql = "DELETE FROM Personas WHERE dni = ?";
+        try (PreparedStatement ps = con.prepareStatement(sql)) {
+            ps.setString(1, dni);
+            ps.executeUpdate();
+        }
+    }
+}
+5. Capa de Servicio (PersonaService.java)
+Maneja la lógica de negocio y gestiona las transacciones JDBC (commit / rollback)
+.
+package edu.usal.service;
+
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.util.List;
+
+import edu.usal.dao.impl.PersonaDAOImpl;
+import edu.usal.dao.interfaces.PersonaDAO;
+import edu.usal.domain.Persona;
+import edu.usal.util.ConexionBD;
+
+public class PersonaService {
+    private PersonaDAO personaDAO = new PersonaDAOImpl();
+
+    public List<Persona> listarPersonas() throws Exception {
+        try (Connection con = ConexionBD.getInstance().getConnection()) {
+            return personaDAO.listarTodas(con);
+        }
+    }
+
+    public void crearPersona(Persona persona) throws Exception {
+        try (Connection con = ConexionBD.getInstance().getConnection()) {
+            con.setAutoCommit(false);
+            try {
+                personaDAO.crear(persona, con);
+                con.commit();
+            } catch (SQLException e) {
+                con.rollback();
+                throw e;
+            }
+        }
+    }
+
+    public void actualizarPersona(Persona persona) throws Exception {
+        try (Connection con = ConexionBD.getInstance().getConnection()) {
+            con.setAutoCommit(false);
+            try {
+                personaDAO.actualizarPorDni(persona, con);
+                con.commit();
+            } catch (SQLException e) {
+                con.rollback();
+                throw e;
+            }
+        }
+    }
+
+    public void eliminarPersona(String dni) throws Exception {
+        try (Connection con = ConexionBD.getInstance().getConnection()) {
+            con.setAutoCommit(false);
+            try {
+                personaDAO.eliminarPorDni(dni, con);
+                con.commit();
+            } catch (SQLException e) {
+                con.rollback();
+                throw e;
+            }
+        }
+    }
+}
+6. Servlet Controlador (PersonaServlet.java)
+Recibe las peticiones HTTP (crear, actualizar, eliminar o listar), delega en la capa de servicio y redirige al JSP
+.
+package edu.usal.controller;
+
+import java.io.IOException;
+import java.util.List;
+import javax.servlet.ServletException;
+import javax.servlet.annotation.WebServlet;
+import javax.servlet.http.HttpServlet;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
+import edu.usal.domain.Persona;
+import edu.usal.service.PersonaService;
+
+@WebServlet("/PersonaServlet")
+public class PersonaServlet extends HttpServlet {
+    private static final long serialVersionUID = 1L;
+    private PersonaService personaService = new PersonaService();
+
+    @Override
+    protected void doGet(HttpServletRequest request, HttpServletResponse response) 
+            throws ServletException, IOException {
+        try {
+            List<Persona> lista = personaService.listarPersonas();
+            request.setAttribute("listaPersonas", lista);
+            request.getRequestDispatcher("index.jsp").forward(request, response);
+        } catch (Exception e) {
+            request.setAttribute("error", "Error al listar: " + e.getMessage());
+            request.getRequestDispatcher("index.jsp").forward(request, response);
+        }
+    }
+
+    @Override
+    protected void doPost(HttpServletRequest request, HttpServletResponse response) 
+            throws ServletException, IOException {
+        
+        String accion = request.getParameter("accion");
+
+        try {
+            if ("crear".equals(accion)) {
+                String dni = request.getParameter("dni");
+                String nombre = request.getParameter("nombre");
+                String apellido = request.getParameter("apellido");
+                int edad = Integer.parseInt(request.getParameter("edad"));
+
+                Persona p = new Persona(dni, nombre, apellido, edad);
+                personaService.crearPersona(p);
+
+            } else if ("actualizar".equals(accion)) {
+                String dni = request.getParameter("dni");
+                String nombre = request.getParameter("nombre");
+                String apellido = request.getParameter("apellido");
+                int edad = Integer.parseInt(request.getParameter("edad"));
+
+                Persona p = new Persona(dni, nombre, apellido, edad);
+                personaService.actualizarPersona(p);
+
+            } else if ("eliminar".equals(accion)) {
+                String dni = request.getParameter("dni");
+                personaService.eliminarPersona(dni);
+            }
+        } catch (Exception e) {
+            request.setAttribute("error", "Ocurrió un error: " + e.getMessage());
+        }
+
+        // Luego de cada operación POST, refrescamos la lista ejecutando doGet
+        doGet(request, response);
+    }
+}
+7. Página Vista JSP (index.jsp)
+Interfaz de usuario en HTML que integra los formularios para Agregar, Actualizar por DNI, Eliminar por DNI y la Tabla de Listado mediante JSTL (<c:forEach>)
+.
+<%@ page language="java" contentType="text/html; charset=UTF-8" pageEncoding="UTF-8"%>
+<%@ taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Gestión de Personas (CRUD)</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .box { border: 1px solid #ccc; padding: 15px; margin-bottom: 20px; width: 450px; background: #f9f9f9; }
+        table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #007bff; color: white; }
+        .error { color: red; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <h2>Sistema de Gestión de Personas</h2>
+
+    <!-- Muestra de mensaje de error si existe -->
+    <c:if test="${not empty error}">
+        <p class="error">${error}</p>
+    </c:if>
+
+    <!-- FORMULARIO 1: CREAR PERSONA -->
+    <div class="box">
+        <h3>1. Agregar Nueva Persona</h3>
+        <form action="PersonaServlet" method="POST">
+            <input type="hidden" name="accion" value="crear">
+            <label>DNI:</label><br>
+            <input type="text" name="dni" required><br>
+            <label>Nombre:</label><br>
+            <input type="text" name="nombre" required><br>
+            <label>Apellido:</label><br>
+            <input type="text" name="apellido" required><br>
+            <label>Edad:</label><br>
+            <input type="number" name="edad" required><br><br>
+            <button type="submit">Agregar Persona</button>
+        </form>
+    </div>
+
+    <!-- FORMULARIO 2: ACTUALIZAR PERSONA POR DNI -->
+    <div class="box">
+        <h3>2. Actualizar Persona (Buscar por DNI)</h3>
+        <form action="PersonaServlet" method="POST">
+            <input type="hidden" name="accion" value="actualizar">
+            <label>DNI de la Persona a Modificar:</label><br>
+            <input type="text" name="dni" required><br>
+            <label>Nuevo Nombre:</label><br>
+            <input type="text" name="nombre" required><br>
+            <label>Nuevo Apellido:</label><br>
+            <input type="text" name="apellido" required><br>
+            <label>Nueva Edad:</label><br>
+            <input type="number" name="edad" required><br><br>
+            <button type="submit">Actualizar Datos</button>
+        </form>
+    </div>
+
+    <!-- FORMULARIO 3: ELIMINAR PERSONA POR DNI -->
+    <div class="box">
+        <h3>3. Eliminar Persona</h3>
+        <form action="PersonaServlet" method="POST">
+            <input type="hidden" name="accion" value="eliminar">
+            <label>DNI de la Persona a Eliminar:</label><br>
+            <input type="text" name="dni" required><br><br>
+            <button type="submit" onclick="return confirm('¿Seguro que desea eliminar esta persona?');">Eliminar Persona</button>
+        </form>
+    </div>
+
+    <hr>
+
+    <!-- TABLA: LISTAR TODAS LAS PERSONAS -->
+    <h2>Listado General de Personas</h2>
+    <form action="PersonaServlet" method="GET">
+        <button type="submit">Cargar / Refrescar Lista</button>
+    </form>
+    <br>
+
+    <c:if test="${not empty listaPersonas}">
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>DNI</th>
+                    <th>Nombre</th>
+                    <th>Apellido</th>
+                    <th>Edad</th>
+                </tr>
+            </thead>
+            <tbody>
+                <c:forEach var="p" items="${listaPersonas}">
+                    <tr>
+                        <td>${p.id}</td>
+                        <td>${p.dni}</td>
+                        <td>${p.nombre}</td>
+                        <td>${p.apellido}</td>
+                        <td>${p.edad}</td>
+                    </tr>
+                </c:forEach>
+            </tbody>
+        </table>
+    </c:if>
+
+    <c:if test="${empty listaPersonas}">
+        <p>No hay personas registradas para mostrar.</p>
+    </c:if>
+
+</body>
+</html>
